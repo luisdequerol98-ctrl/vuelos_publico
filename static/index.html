@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Buscador de vuelos</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✈️</text></svg>">
+  <link rel="stylesheet" href="/static/estilo.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="barra">
+    <div class="marca"><span aria-hidden="true">✈</span> Buscador de vuelos</div>
+    <div id="estado" class="estado" aria-live="polite"></div>
+    <button id="btn-ajustes" class="boton boton-secundario" type="button">Ajustes</button>
+  </header>
+
+  <main class="disposicion">
+    <aside class="lateral">
+      <section class="tarjeta">
+        <h2>Nueva alerta</h2>
+        <form id="form-alerta" novalidate>
+          <div class="campo">
+            <label for="origen-txt">Origen</label>
+            <div class="combo">
+              <input id="origen-txt" data-campo="origen" role="combobox" aria-autocomplete="list" aria-expanded="false"
+                aria-controls="origen-lista" autocomplete="off" spellcheck="false" placeholder="Ciudad, aeropuerto, isla o país">
+              <ul id="origen-lista" class="combo-lista" role="listbox" aria-label="Aeropuertos de origen" hidden></ul>
+            </div>
+            <input type="hidden" name="origen" value="BCN">
+          </div>
+          <div class="campo">
+            <label for="destino-txt">Destino</label>
+            <div class="combo">
+              <input id="destino-txt" data-campo="destino" role="combobox" aria-autocomplete="list" aria-expanded="false"
+                aria-controls="destino-lista" autocomplete="off" spellcheck="false" placeholder="Ej.: Lisboa, Creta, Japón o LIS">
+              <ul id="destino-lista" class="combo-lista" role="listbox" aria-label="Aeropuertos de destino" hidden></ul>
+            </div>
+            <input type="hidden" name="destino">
+          </div>
+          <div class="fila-2">
+            <label>Primer día de ida
+              <input name="fecha_desde" type="date" required>
+            </label>
+            <label>Último día de vuelta
+              <input name="fecha_hasta" type="date" required>
+            </label>
+          </div>
+          <div class="fila-2">
+            <label>Días en destino
+              <input name="dias" type="number" min="1" max="120" value="5" required>
+            </label>
+            <label>Flexibilidad
+              <select name="flex">
+                <option value="0">Exactos</option>
+                <option value="1">± 1 día</option>
+                <option value="2">± 2 días</option>
+                <option value="3">± 3 días</option>
+              </select>
+            </label>
+          </div>
+          <label>Precio objetivo (€ por persona, ida y vuelta)
+            <input name="precio_objetivo" type="number" min="1" step="1" placeholder="120" required>
+          </label>
+          <label>Máximo de horas por trayecto, con escalas (opcional)
+            <input name="max_horas" type="number" min="1" max="72" step="0.5" placeholder="sin límite">
+          </label>
+          <label class="casilla"><input name="solo_directos" type="checkbox"> Solo vuelos directos</label>
+          <p class="ayuda">Ida el 10 y vuelta el 15 = 5 días. El límite de horas se aplica a la ida y a la vuelta por separado, contando las esperas en las escalas. También se miran 5 días antes y después de tu rango y 2 días de más o de menos, para proponerte alternativas.</p>
+          <p id="form-error" class="mensaje-error" role="alert" hidden></p>
+          <button class="boton" type="submit">Crear alerta y buscar</button>
+        </form>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Tus alertas</h2>
+        <ul id="lista-alertas" class="lista-alertas"></ul>
+      </section>
+    </aside>
+
+    <section id="detalle" class="detalle" aria-live="polite"></section>
+  </main>
+
+  <dialog id="dlg-ajustes" class="dialogo">
+    <form method="dialog" id="form-ajustes">
+      <h2>Ajustes</h2>
+
+      <fieldset>
+        <legend>Avisos por Telegram</legend>
+        <ol class="pasos">
+          <li>En Telegram, abre <b>@BotFather</b>, escribe <code>/newbot</code> y sigue los pasos. Te dará un token.</li>
+          <li>Pega el token aquí y pulsa <b>Guardar</b>.</li>
+          <li>Abre tu bot nuevo en Telegram, pulsa <b>Iniciar</b> y escríbele «hola».</li>
+          <li>Pulsa <b>Detectar mi chat</b> y luego <b>Enviar prueba</b>.</li>
+        </ol>
+        <label>Token del bot
+          <input name="telegram_token" type="password" autocomplete="off" placeholder="123456789:AA…">
+        </label>
+        <label>Chat
+          <input name="telegram_chat_id" autocomplete="off" placeholder="se rellena solo">
+        </label>
+        <div class="botones">
+          <button class="boton boton-secundario" type="button" id="btn-detectar">Detectar mi chat</button>
+          <button class="boton boton-secundario" type="button" id="btn-probar">Enviar prueba</button>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Revisar con el PC apagado (GitHub)</legend>
+        <p id="github-estado" class="mensaje"></p>
+        <ol class="pasos" id="github-pasos">
+          <li>Entra en <b>github.com</b> (crea una cuenta gratuita si no tienes).</li>
+          <li>Crea un repositorio vacío: botón <i>New</i> → nombre <code>buscador-vuelos</code> → <i>Private</i> (o <i>Public</i>: minutos ilimitados, pero tus viajes quedan a la vista) → <i>Create repository</i>.</li>
+          <li>Crea un token: tu foto → <i>Settings</i> → <i>Developer settings</i> → <i>Personal access tokens</i> → <i>Fine-grained tokens</i> → <i>Generate new token</i>. En <i>Repository access</i> elige solo ese repositorio; en <i>Permissions</i> pon <b>Actions, Contents, Secrets y Workflows</b> en <i>Read and write</i>; caducidad: 1 año.</li>
+          <li id="github-paso-final">Pega aquí el repositorio y el token y pulsa <b>Conectar y subir</b>. Tus alertas, tu historial y los datos de Telegram se copian a GitHub.</li>
+        </ol>
+        <div id="github-campos" class="github-campos">
+          <label>Repositorio (usuario/nombre)
+            <input name="github_repo" autocomplete="off" placeholder="tu-usuario/buscador-vuelos">
+          </label>
+          <label>Token de GitHub
+            <input name="github_token" type="password" autocomplete="off" placeholder="github_pat_…">
+          </label>
+        </div>
+        <p class="ayuda">Gratis: GitHub da 2.000 minutos al mes en repositorios privados. Desde GitHub, Google responde de forma irregular y hay que repetir consultas: cada revisión gasta de 2 a 10 minutos por alerta según lo amplio que sea el rango. Con 5 revisiones al día caben 1 o 2 alertas con rangos de un mes; con rangos cortos, más.</p>
+        <div class="botones">
+          <button class="boton" type="button" id="btn-github">Conectar y subir</button>
+          <button class="boton boton-secundario" type="button" id="btn-github-cambiar" hidden>Cambiar a otro repositorio</button>
+          <button class="boton boton-secundario boton-peligro" type="button" id="btn-github-off" hidden>Volver al modo local</button>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Aviasales (opcional)</legend>
+        <p class="ayuda">Añade una tercera fuente. Token gratuito al registrarte en travelpayouts.com y unirte al programa de Aviasales.</p>
+        <label>Token de Travelpayouts
+          <input name="aviasales_token" type="password" autocomplete="off">
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Revisiones automáticas</legend>
+        <div class="fila-2">
+          <label>Revisiones al día
+            <input name="revisiones_dia" type="number" min="1" max="24">
+          </label>
+          <label>Separación mínima (min)
+            <input name="separacion_min" type="number" min="0" max="600" step="10">
+          </label>
+        </div>
+        <div class="solo-local fila-2">
+          <label>Desde la hora
+            <input name="hora_inicio" type="number" min="0" max="23">
+          </label>
+          <label>Hasta la hora
+            <input name="hora_fin" type="number" min="1" max="24">
+          </label>
+        </div>
+        <p class="ayuda solo-local">Cada medianoche se sortean las horas al azar dentro de ese horario. Si el ordenador está apagado o suspendido a esa hora, la revisión se pierde. Si sueles apagarlo por la noche, acota el horario.</p>
+        <p class="ayuda solo-nube">En GitHub cada día se eligen al azar las horas entre 8 huecos repartidos por el día (máximo 8 revisiones). GitHub suele arrancar con unos minutos de retraso, lo que añade más azar.</p>
+        <button class="boton boton-secundario solo-local" type="button" id="btn-resortear">Volver a sortear las de hoy</button>
+      </fieldset>
+
+      <p id="ajustes-msg" class="mensaje" role="status" hidden></p>
+      <div class="botones botones-fin">
+        <button class="boton boton-secundario" value="cancel" formnovalidate>Cerrar</button>
+        <button class="boton" type="button" id="btn-guardar-ajustes">Guardar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

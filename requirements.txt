@@ -1,0 +1,7 @@
+flask>=3.1
+requests>=2.32
+faster-flights>=3.8
+airportsdata>=20261103
+tzdata
+pynacl>=1.5
+truststore>=0.10; sys_platform == "win32"

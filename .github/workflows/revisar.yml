@@ -1,0 +1,76 @@
+name: Revisar vuelos
+# Generado por el buscador de vuelos (nube.py). Si cambias los huecos, cámbialos también allí.
+on:
+  schedule:
+    - cron: "17 0 * * *"
+    - cron: "41 3 * * *"
+    - cron: "9 6 * * *"
+    - cron: "33 9 * * *"
+    - cron: "52 12 * * *"
+    - cron: "26 15 * * *"
+    - cron: "4 18 * * *"
+    - cron: "48 21 * * *"
+  push:
+    branches: [main]
+    paths: ["alertas.json"]
+  workflow_dispatch:
+    inputs:
+      alerta:
+        description: "Id de la alerta (vacío = todas)"
+        required: false
+        default: ""
+
+concurrency:
+  group: buscador-vuelos
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TZ: Europe/Madrid
+      EVENTO: ${{ github.event_name }}
+      CRON: ${{ github.event.schedule }}
+      ALERTA: ${{ github.event.inputs.alerta }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: ¿Toca revisar ahora?
+        id: decidir
+        run: python3 nube.py decidir >> "$GITHUB_OUTPUT"
+      - name: Preparar Python
+        if: steps.decidir.outputs.revisar == 'si'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Instalar dependencias
+        if: steps.decidir.outputs.revisar == 'si'
+        run: pip install -r requirements.txt
+      - name: Traer la base de datos
+        if: steps.decidir.outputs.revisar == 'si'
+        run: |
+          if git fetch --depth=1 origin datos; then git show FETCH_HEAD:vuelos.db > vuelos.db; else echo "Primera revisión: base de datos nueva"; fi
+      - name: Revisar precios
+        if: steps.decidir.outputs.revisar == 'si'
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          AVIASALES_TOKEN: ${{ secrets.AVIASALES_TOKEN }}
+        run: python nube.py revisar
+      - name: Guardar la base de datos
+        if: always() && steps.decidir.outputs.revisar == 'si'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -f vuelos.db || exit 0
+          mkdir -p /tmp/datos && cp vuelos.db /tmp/datos/ && cd /tmp/datos
+          git init -q -b datos
+          git config user.name "buscador-vuelos"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vuelos.db
+          git commit -q -m "Datos $(date '+%Y-%m-%d %H:%M')"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" datos
