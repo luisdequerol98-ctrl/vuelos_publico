@@ -1,19 +1,4 @@
 {
   "revisiones_dia": 5,
-  "alertas": [
-    {
-      "origen": "BCN",
-      "destino": "NRT",
-      "fecha_desde": "2027-05-01",
-      "fecha_hasta": "2027-05-31",
-      "dias": 14,
-      "flex": 3,
-      "precio_objetivo": 1000.0,
-      "solo_directos": false,
-      "max_horas": 24.0,
-      "activa": true,
-      "creada": "2026-11-19T17:09:13",
-      "id": 2
-    }
-  ]
+  "alertas": []
 }
