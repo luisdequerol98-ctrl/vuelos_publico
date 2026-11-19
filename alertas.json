@@ -1,4 +1,20 @@
 {
   "revisiones_dia": 5,
-  "alertas": []
+  "alertas": [
+    {
+      "origen": "BCN",
+      "destino": "AHO",
+      "fecha_desde": "2027-06-01",
+      "fecha_hasta": "2027-06-30",
+      "dias": 5,
+      "flex": 3,
+      "precio_objetivo": 60.0,
+      "solo_directos": true,
+      "max_horas": null,
+      "personas": 5,
+      "activa": true,
+      "creada": "2026-11-19T17:27:04",
+      "id": 1
+    }
+  ]
 }
