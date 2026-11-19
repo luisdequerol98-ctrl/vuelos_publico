@@ -21,9 +21,10 @@ ARCHIVO_ALERTAS = CARPETA / "alertas.json"
 HUECOS = ["17 0 * * *", "41 3 * * *", "9 6 * * *", "33 9 * * *",
           "52 12 * * *", "26 15 * * *", "4 18 * * *", "48 21 * * *"]
 CAMPOS = ["origen", "destino", "fecha_desde", "fecha_hasta", "dias", "flex", "precio_objetivo",
-          "solo_directos", "max_horas", "activa", "creada"]
+          "solo_directos", "max_horas", "personas", "activa", "creada"]
 CAMPOS_BUSQUEDA = {"origen", "destino", "fecha_desde", "fecha_hasta", "dias", "flex", "solo_directos",
-                   "max_horas", "activa"}
+                   "max_horas", "personas", "activa"}
+MAX_PERSONAS = 9   # lo máximo que deja reservar de una vez Google Flights
 
 
 # ---------------------------------------------------------------- planificación (sin dependencias)
@@ -73,6 +74,7 @@ def _normalizar(d: dict) -> list:
         int(d["dias"]), int(d.get("flex") or 0), float(d["precio_objetivo"]),
         int(bool(d.get("solo_directos"))),
         float(d["max_horas"]) if d.get("max_horas") not in (None, "") else None,
+        max(1, min(MAX_PERSONAS, int(d.get("personas") or 1))),
         int(bool(d.get("activa", True))), d.get("creada") or datetime.now().isoformat(timespec="seconds"),
     ]
 
@@ -99,7 +101,7 @@ def sincronizar(datos: dict) -> set[int]:
         if not distintos:
             continue
         reinicia_aviso = bool(distintos & {"precio_objetivo", "max_horas", "solo_directos", "fecha_desde",
-                                           "fecha_hasta", "dias", "flex", "origen", "destino"})
+                                           "fecha_hasta", "dias", "flex", "origen", "destino", "personas"})
         db.ex(f"UPDATE alertas SET {', '.join(f'{c}=?' for c in CAMPOS)}"
               f"{', ultimo_aviso_precio=NULL' if reinicia_aviso else ''} WHERE id=?", (*valores, id_))
         if distintos & CAMPOS_BUSQUEDA and nuevo["activa"]:

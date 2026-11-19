@@ -12,6 +12,14 @@
 Todas devuelven "tarifas": diccionarios con fuente, tramo (ida | vuelta | iv), fecha,
 fecha_vuelta, precio (€ por persona), aerolinea, escalas, hora, enlace, duracion_min
 (duración total del trayecto con escalas) y duracion_vuelta_min (solo en iv).
+
+Con varias personas (medido el 19/11/2026):
+- Google Flights da el precio TOTAL del grupo y ya solo enseña tarifas con plazas para
+  todos (se divide entre las personas para guardarlo por persona).
+- Wizz Air da el precio por persona de la tarifa que tiene plazas para todos.
+- Ryanair (cheapestPerDay) no admite pasajeros: es el precio de la plaza más barata, y
+  para un grupo puede salir algo más caro. Su enlace ya abre la reserva con todos.
+- Aviasales son precios vistos por otros usuarios, por persona.
 """
 from __future__ import annotations
 
@@ -142,8 +150,9 @@ def _reintentar(funcion, *args, intentos: int = 3):
             pausa(2, 4)
 
 
-def _consulta_google(vuelos: list[FlightQuery], viaje: str, max_escalas: int | None = None):
-    return create_query(flights=vuelos, trip=viaje, passengers=Passengers(adults=1),
+def _consulta_google(vuelos: list[FlightQuery], viaje: str, max_escalas: int | None = None,
+                     personas: int = 1):
+    return create_query(flights=vuelos, trip=viaje, passengers=Passengers(adults=personas),
                         language="es", currency="EUR", max_stops=max_escalas)
 
 
@@ -181,19 +190,20 @@ def _cabe(f, max_min: int | None) -> bool:
     return m is not None and m <= max_min
 
 
-def google_url_ida_vuelta(origen: str, destino: str, ida: str, vuelta: str) -> str:
+def google_url_ida_vuelta(origen: str, destino: str, ida: str, vuelta: str, personas: int = 1) -> str:
     """Enlace a la búsqueda de ida y vuelta en Google Flights (no hace petición)."""
     q = _consulta_google([FlightQuery(date=ida, from_airport=origen, to_airport=destino),
                           FlightQuery(date=vuelta, from_airport=destino, to_airport=origen)],
-                         "round-trip")
+                         "round-trip", personas=personas)
     return q.url()
 
 
 def google_tramo(origen: str, destino: str, fecha: str, tramo: str,
-                 max_min: int | None = None) -> list[dict]:
+                 max_min: int | None = None, personas: int = 1) -> list[dict]:
     """Solo ida más barato del día, el directo más barato y el más barato dentro del
     límite de horas (si son vuelos distintos)."""
-    q = _consulta_google([FlightQuery(date=fecha, from_airport=origen, to_airport=destino)], "one-way")
+    q = _consulta_google([FlightQuery(date=fecha, from_airport=origen, to_airport=destino)], "one-way",
+                         personas=personas)
     vuelos = [f for f in _reintentar(get_flights, q) if f.price and f.price > 0]
     if not vuelos:
         return []
@@ -213,7 +223,7 @@ def google_tramo(origen: str, destino: str, fecha: str, tramo: str,
             continue
         vistos.add(id(f))
         primero = f.flights[0] if f.flights else None
-        salida.append(tarifa("google", tramo, fecha, f.price,
+        salida.append(tarifa("google", tramo, fecha, f.price / personas,   # Google da el total del grupo
                              aerolinea=", ".join(f.airlines) if f.airlines else None,
                              escalas=max(len(f.flights) - 1, 0),
                              hora=_hora(primero.departure) if primero else None,
@@ -222,7 +232,7 @@ def google_tramo(origen: str, destino: str, fecha: str, tramo: str,
 
 
 def google_ida_vuelta(origen: str, destino: str, ida: str, vuelta: str, solo_directos: bool,
-                      max_min: int | None = None) -> list[dict]:
+                      max_min: int | None = None, personas: int = 1) -> list[dict]:
     """Precio total de ida y vuelta comprado como un único billete.
 
     En vuelos largos o con aerolíneas tradicionales suele ser mucho más barato que sumar
@@ -231,7 +241,7 @@ def google_ida_vuelta(origen: str, destino: str, ida: str, vuelta: str, solo_dir
     """
     q = _consulta_google([FlightQuery(date=ida, from_airport=origen, to_airport=destino),
                           FlightQuery(date=vuelta, from_airport=destino, to_airport=origen)],
-                         "round-trip", max_escalas=0 if solo_directos else None)
+                         "round-trip", max_escalas=0 if solo_directos else None, personas=personas)
     idas = sorted((f for f in _reintentar(get_flights, q) if f.price and f.price > 0), key=lambda f: f.price)
     if not idas:
         return []
@@ -240,7 +250,7 @@ def google_ida_vuelta(origen: str, destino: str, ida: str, vuelta: str, solo_dir
         primero = f_ida.flights[0] if f_ida.flights else None
         aerolineas = list(dict.fromkeys((f_ida.airlines or []) + ((f_vuelta.airlines or []) if f_vuelta else [])))
         escalas = max(len(f_ida.flights) - 1, (len(f_vuelta.flights) - 1) if f_vuelta else 0, 0)
-        return tarifa("google", "iv", ida, precio, aerolinea=", ".join(aerolineas) or None,
+        return tarifa("google", "iv", ida, precio / personas, aerolinea=", ".join(aerolineas) or None,
                       escalas=0 if solo_directos else escalas,
                       hora=_hora(primero.departure) if primero else None, enlace=q.url(),
                       fecha_vuelta=vuelta, duracion_min=minutos_google(f_ida),
@@ -270,15 +280,17 @@ def google_ida_vuelta(origen: str, destino: str, ida: str, vuelta: str, solo_dir
 RYANAIR_URL = "https://www.ryanair.com/api/farfnd/v4/oneWayFares/{o}/{d}/cheapestPerDay"
 
 
-def ryanair_enlace(origen: str, destino: str, fecha: str) -> str:
-    params = {"adults": 1, "teens": 0, "children": 0, "infants": 0, "dateOut": fecha,
+def ryanair_enlace(origen: str, destino: str, fecha: str, personas: int = 1) -> str:
+    params = {"adults": personas, "teens": 0, "children": 0, "infants": 0, "dateOut": fecha,
               "isConnectedFlight": "false", "isReturn": "false", "discount": 0,
               "originIata": origen, "destinationIata": destino}
     return "https://www.ryanair.com/es/es/trip/flights/select?" + urlencode(params)
 
 
-def ryanair_tramo(origen: str, destino: str, desde: date, hasta: date, tramo: str) -> list[dict]:
-    """Tarifa más barata de cada día. Si Ryanair no opera la ruta, devuelve []."""
+def ryanair_tramo(origen: str, destino: str, desde: date, hasta: date, tramo: str,
+                  personas: int = 1) -> list[dict]:
+    """Tarifa más barata de cada día. Si Ryanair no opera la ruta, devuelve [].
+    Esta consulta no admite pasajeros: con varias personas solo cambia el enlace."""
     salida = []
     for mes in meses(desde, hasta):
         r = requests.get(RYANAIR_URL.format(o=origen, d=destino),
@@ -299,7 +311,7 @@ def ryanair_tramo(origen: str, destino: str, desde: date, hasta: date, tramo: st
                 continue
             sale, llega = f.get("departureDate") or "", f.get("arrivalDate") or ""
             salida.append(tarifa("ryanair", tramo, dia, precio, aerolinea="Ryanair", escalas=0,
-                                 hora=sale[11:16] or None, enlace=ryanair_enlace(origen, destino, dia),
+                                 hora=sale[11:16] or None, enlace=ryanair_enlace(origen, destino, dia, personas),
                                  duracion_min=minutos_entre(origen, sale, destino, llega) if sale and llega else None))
         pausa(0.3, 0.8)
     return salida
@@ -327,12 +339,14 @@ def _wizz_base() -> str:
     raise RuntimeError("no se encuentra la versión actual de la API de Wizz Air")
 
 
-def wizz_enlace(origen: str, destino: str, fecha: str) -> str:
-    return f"https://wizzair.com/en-gb/booking/select-flight/{origen}/{destino}/{fecha}/null/1/0/0/null"
+def wizz_enlace(origen: str, destino: str, fecha: str, personas: int = 1) -> str:
+    return f"https://wizzair.com/en-gb/booking/select-flight/{origen}/{destino}/{fecha}/null/{personas}/0/0/null"
 
 
-def wizz_tramo(origen: str, destino: str, desde: date, hasta: date, tramo: str) -> list[dict]:
-    """Tarifa más barata de cada día. Si Wizz Air no opera la ruta, devuelve []."""
+def wizz_tramo(origen: str, destino: str, desde: date, hasta: date, tramo: str,
+               personas: int = 1) -> list[dict]:
+    """Tarifa más barata de cada día (por persona, con plazas para todos).
+    Si Wizz Air no opera la ruta, devuelve []."""
     global _wizz_api
     base = _wizz_base()
     estimada = minutos_estimados(origen, destino)
@@ -342,7 +356,7 @@ def wizz_tramo(origen: str, destino: str, desde: date, hasta: date, tramo: str) 
         r = requests.post(f"{base}/Api/search/timetable", timeout=20, json={
             "flightList": [{"departureStation": origen, "arrivalStation": destino,
                             "from": inicio.isoformat(), "to": fin.isoformat()}],
-            "priceType": "regular", "adultCount": 1, "childCount": 0, "infantCount": 0},
+            "priceType": "regular", "adultCount": personas, "childCount": 0, "infantCount": 0},
             headers={**NAVEGADOR, "Content-Type": "application/json",
                      "Origin": "https://wizzair.com", "Referer": "https://wizzair.com/"})
         if r.status_code in (400, 404):
@@ -364,7 +378,7 @@ def wizz_tramo(origen: str, destino: str, desde: date, hasta: date, tramo: str) 
             horas = f.get("departureDates") or []
             salida.append(tarifa("wizz", tramo, dia, precio, aerolinea="Wizz Air", escalas=0,
                                  hora=horas[0][11:16] if horas else None,
-                                 enlace=wizz_enlace(origen, destino, dia), duracion_min=estimada))
+                                 enlace=wizz_enlace(origen, destino, dia, personas), duracion_min=estimada))
         inicio = fin + timedelta(days=1)
         pausa(0.3, 0.8)
     return salida

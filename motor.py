@@ -70,6 +70,11 @@ def max_minutos(a: dict) -> int | None:
     return int(round(a["max_horas"] * 60)) if a.get("max_horas") else None
 
 
+def personas_de(a: dict) -> int:
+    """Adultos que viajan. Los precios se comparan y guardan siempre por persona."""
+    return max(1, int(a.get("personas") or 1))
+
+
 def _supera(minutos, limite) -> bool:
     """Si no se conoce la duración (algunas tarifas de Aviasales), no se descarta."""
     return bool(limite and minutos and minutos > limite)
@@ -326,6 +331,7 @@ def revisar_alerta(a: dict, motivo: str) -> int | None:
     fechas_vuelta = _rango(al["vuelta_desde"], al["vuelta_hasta"])
     token_av = db.ajuste("aviasales_token", "")
     limite = max_minutos(a)
+    personas = personas_de(a)
 
     ESTADO.update(ocupado=True, alerta_id=a["id"], paso=0,
                   total=4 + (2 if token_av else 0) + len(fechas_ida) + len(fechas_vuelta) + RT_TOP,
@@ -340,7 +346,7 @@ def revisar_alerta(a: dict, motivo: str) -> int | None:
                                      ("vuelta", (dst, o, al["vuelta_desde"], al["vuelta_hasta"]))):
         _paso(f"{o} → {dst}: Ryanair ({tramo})")
         try:
-            tarifas += fuentes.ryanair_tramo(oo, dd, f1, f2, tramo)
+            tarifas += fuentes.ryanair_tramo(oo, dd, f1, f2, tramo, personas)
         except Exception as e:
             errores.append(f"Ryanair ({tramo}): {e}")
 
@@ -349,7 +355,7 @@ def revisar_alerta(a: dict, motivo: str) -> int | None:
                                      ("vuelta", (dst, o, al["vuelta_desde"], al["vuelta_hasta"]))):
         _paso(f"{o} → {dst}: Wizz Air ({tramo})")
         try:
-            tarifas += fuentes.wizz_tramo(oo, dd, f1, f2, tramo)
+            tarifas += fuentes.wizz_tramo(oo, dd, f1, f2, tramo, personas)
         except Exception as e:
             errores.append(f"Wizz Air ({tramo}): {e}")
 
@@ -376,7 +382,7 @@ def revisar_alerta(a: dict, motivo: str) -> int | None:
             if seguidos >= CORTE_GOOGLE:
                 continue
             try:
-                tarifas += fuentes.google_tramo(oo, dd, f, tramo, limite)
+                tarifas += fuentes.google_tramo(oo, dd, f, tramo, limite, personas)
                 seguidos = 0
             except Exception as e:
                 fallos, seguidos, ultimo_error = fallos + 1, seguidos + 1, str(e)[:200]
@@ -395,7 +401,8 @@ def revisar_alerta(a: dict, motivo: str) -> int | None:
     for i, c in enumerate(elegidas):
         _paso(f"{o} → {dst}: Google Flights (ida y vuelta {i + 1}/{len(elegidas)})")
         try:
-            tarifas += fuentes.google_ida_vuelta(o, dst, c["ida"], c["vuelta"], bool(a["solo_directos"]), limite)
+            tarifas += fuentes.google_ida_vuelta(o, dst, c["ida"], c["vuelta"], bool(a["solo_directos"]),
+                                                 limite, personas)
         except Exception as e:
             fallos_rt += 1
             ultimo_error = str(e)[:200]
@@ -466,7 +473,8 @@ def detalle_ultima(a: dict) -> dict | None:
     res = analizar(a, al, tarifas)
     horario = analisis_horario(a["id"])
     for c in res["combos"]:
-        c["enlace_google_iv"] = fuentes.google_url_ida_vuelta(a["origen"], a["destino"], c["ida"], c["vuelta"])
+        c["enlace_google_iv"] = fuentes.google_url_ida_vuelta(a["origen"], a["destino"], c["ida"], c["vuelta"],
+                                                              personas_de(a))
     return {"revision": {k: rev[k] for k in ("id", "inicio", "fin", "motivo", "n_tarifas", "errores")},
             "mejor": res["mejor"], "combos": res["combos"], "n_min": al["n_min"], "n_max": al["n_max"],
             "alternativas": alternativas(a, res, horario), "horario": horario,

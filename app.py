@@ -62,6 +62,19 @@ def leer_max_horas(valor) -> float | None:
     return horas
 
 
+def leer_personas(valor) -> int:
+    """Vacío = 1. Lanza ValueError con un texto para la persona."""
+    if valor in (None, ""):
+        return 1
+    try:
+        n = int(str(valor).strip())
+    except ValueError:
+        raise ValueError("El número de personas tiene que ser un número entero.")
+    if not 1 <= n <= nube.MAX_PERSONAS:
+        raise ValueError(f"Pueden viajar de 1 a {nube.MAX_PERSONAS} personas por alerta.")
+    return n
+
+
 def validar_alerta(d: dict) -> dict:
     """Comprueba el formulario. Lanza ValueError con el motivo."""
     origen = str(d.get("origen", "")).strip().upper()
@@ -93,7 +106,7 @@ def validar_alerta(d: dict) -> dict:
     return {"origen": origen, "destino": destino, "fecha_desde": desde.isoformat(),
             "fecha_hasta": hasta.isoformat(), "dias": dias, "flex": flex, "precio_objetivo": objetivo,
             "solo_directos": bool(d.get("solo_directos")), "max_horas": leer_max_horas(d.get("max_horas")),
-            "activa": True, "creada": motor.ahora_iso()}
+            "personas": leer_personas(d.get("personas")), "activa": True, "creada": motor.ahora_iso()}
 
 
 # ---------------------------------------------------------------- página
@@ -173,6 +186,11 @@ def modificar(alerta_id: int):
             cambios["max_horas"] = leer_max_horas(d["max_horas"])
         except ValueError as e:
             return error(str(e))
+    if "personas" in d:
+        try:
+            cambios["personas"] = leer_personas(d["personas"])
+        except ValueError as e:
+            return error(str(e))
     if not cambios:
         return jsonify({"ok": True})
 
@@ -183,7 +201,7 @@ def modificar(alerta_id: int):
                     a.update(cambios)
         # Solo hace falta revisar al momento si cambia lo que se busca; si no, se aplica en la
         # próxima revisión programada y no se gastan minutos de GitHub.
-        revisar_ya = "max_horas" in cambios or cambios.get("activa") is True
+        revisar_ya = bool({"max_horas", "personas"} & set(cambios)) or cambios.get("activa") is True
         try:
             remoto.modificar_alertas(aplicar, f"Cambio en la alerta {alerta_id}"
                                               f"{'' if revisar_ya else ' [skip actions]'}")
@@ -192,11 +210,11 @@ def modificar(alerta_id: int):
         return jsonify({"ok": True})
 
     for campo, valor in cambios.items():
-        reinicia = ", ultimo_aviso_precio=NULL" if campo in ("precio_objetivo", "max_horas") else ""
+        reinicia = ", ultimo_aviso_precio=NULL" if campo in ("precio_objetivo", "max_horas", "personas") else ""
         db.ex(f"UPDATE alertas SET {campo}=?{reinicia} WHERE id=?",
               (int(valor) if isinstance(valor, bool) else valor, alerta_id))
-    if "max_horas" in cambios:
-        motor.encolar(alerta_id, "manual")   # el límite cambia qué vuelos se piden a Google
+    if {"max_horas", "personas"} & set(cambios):
+        motor.encolar(alerta_id, "manual")   # cambian los vuelos y precios que se piden a las webs
     return jsonify({"ok": True})
 
 

@@ -81,16 +81,24 @@ def _linea_tramo(icono: str, nombre: str, fecha: str, t: dict) -> str:
 
 
 def mensaje(alerta: dict, combo: dict, alternativas: list[dict]) -> str:
+    personas = max(1, int(alerta.get("personas") or 1))
+    if personas == 1:
+        precio = f"<b>{euros(combo['precio'])}</b> ida y vuelta (objetivo {euros(alerta['precio_objetivo'])})"
+    else:
+        precio = (f"<b>{euros(combo['precio'])} por persona</b> ida y vuelta "
+                  f"(objetivo {euros(alerta['precio_objetivo'])}) · "
+                  f"<b>{euros(round(combo['precio'] * personas, 2))} en total</b> para {personas}")
     lineas = [
         "✈️ <b>Vuelo por debajo de tu objetivo</b>",
-        f"{alerta['origen']} → {alerta['destino']} · <b>{euros(combo['precio'])}</b> ida y vuelta "
-        f"(objetivo {euros(alerta['precio_objetivo'])})",
+        f"{alerta['origen']} → {alerta['destino']} · {precio}",
         "",
     ]
     if combo["tipo"] == "separados":
         lineas.append(_linea_tramo("🛫", "Ida", combo["ida"], combo["tramo_ida"]))
         lineas.append(_linea_tramo("🛬", "Vuelta", combo["vuelta"], combo["tramo_vuelta"]))
         lineas.append("Son dos billetes de solo ida: se compran por separado.")
+        if personas > 1 and "ryanair" in (combo["tramo_ida"]["fuente"], combo["tramo_vuelta"]["fuente"]):
+            lineas.append(f"Ryanair da el precio de la plaza más barata: para {personas} puede salir algo más caro.")
         lineas.append("")
         lineas.append(f'<a href="{escape(combo["tramo_ida"]["enlace"] or "")}">Ver ida</a> · '
                       f'<a href="{escape(combo["tramo_vuelta"]["enlace"] or "")}">Ver vuelta</a>')

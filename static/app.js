@@ -154,7 +154,7 @@ async function cargarAlertas() {
       : `<span class="precio meta">${a.revisiones ? "sin vuelos" : "buscando…"}</span>`;
     return `<li><button type="button" data-id="${a.id}" aria-current="${a.id === est.sel}" class="${a.activa ? "" : "pausada"}">
       <span class="ruta"><span>${esc(etiquetaAeropuerto(a.origen, true))} → ${esc(etiquetaAeropuerto(a.destino, true))}${a.activa ? "" : " · en pausa"}</span>${precio}</span>
-      <span class="meta">${fCorta(a.fecha_desde)} – ${fCorta(a.fecha_hasta)} · ${a.dias} días${a.flex ? ` ±${a.flex}` : ""} · objetivo ${euros(a.precio_objetivo)}</span>
+      <span class="meta">${fCorta(a.fecha_desde)} – ${fCorta(a.fecha_hasta)} · ${a.dias} días${a.flex ? ` ±${a.flex}` : ""}${personas(a) > 1 ? ` · ${personas(a)} personas` : ""} · objetivo ${euros(a.precio_objetivo)}${personas(a) > 1 ? " p. p." : ""}</span>
       ${a.minimo != null ? `<span class="meta">★ Mejor hasta ahora: <b>${euros(a.minimo)}</b> el ${fHora(a.minimo_fecha)}</span>` : ""}
     </button></li>`;
   }).join("");
@@ -326,6 +326,14 @@ const selectores = {};
   f.fecha_desde.min = min;
   f.fecha_hasta.min = min;
   f.fecha_desde.addEventListener("change", () => { f.fecha_hasta.min = f.fecha_desde.value || min; });
+  const pintarTotalObjetivo = () => {
+    const n = Number(f.personas.value) || 1, p = Number(f.precio_objetivo.value);
+    $("#objetivo-total").textContent = n > 1
+      ? `Precio de ida y vuelta por persona${p > 0 ? `: ${euros(p * n)} en total para ${n} personas` : ""}. Se buscan vuelos con plazas para todos.`
+      : "Precio de ida y vuelta por persona.";
+  };
+  f.personas.addEventListener("input", pintarTotalObjetivo);
+  f.precio_objetivo.addEventListener("input", pintarTotalObjetivo);
   f.addEventListener("submit", async (e) => {
     e.preventDefault();
     const err = $("#form-error");
@@ -388,18 +396,28 @@ function pintarDetalle() {
 
 const clave = (c) => `${c.ida}|${c.dias}`;
 
+// Los precios van siempre por persona; con un grupo se enseña también el total.
+const personas = (a) => Math.max(1, Number(a?.personas) || 1);
+const totalGrupo = (precio, a) => (personas(a) > 1 && precio != null
+  ? `${euros(precio * personas(a))} en total para ${personas(a)} personas` : "");
+const avisoRyanair = (c, a) => (personas(a) > 1 && c?.tipo === "separados"
+  && [c.tramo_ida?.fuente, c.tramo_vuelta?.fuente].includes("ryanair")
+  ? ` Ryanair da el precio de la plaza más barata: para ${personas(a)} puede salir algo más caro (su enlace ya abre la reserva para ${personas(a)}).` : "");
+
 function htmlCabecera(a) {
   const extras = [`${a.dias} días${a.flex ? ` (± ${a.flex})` : ""}`];
+  if (personas(a) > 1) extras.push(`${personas(a)} personas`);
   if (a.solo_directos) extras.push("solo directos");
   if (a.max_horas) extras.push(`máx. ${String(a.max_horas).replace(".", ",")} h por trayecto`);
   return `<section class="tarjeta cabecera">
     <div>
       <h1>${esc(etiquetaAeropuerto(a.origen))} → ${esc(etiquetaAeropuerto(a.destino))}${a.activa ? "" : " · en pausa"}</h1>
-      <p class="sub">Ida desde el ${fCorta(a.fecha_desde)} · vuelta hasta el ${fCorta(a.fecha_hasta)} · ${extras.join(" · ")} · objetivo <b>${euros(a.precio_objetivo)}</b></p>
+      <p class="sub">Ida desde el ${fCorta(a.fecha_desde)} · vuelta hasta el ${fCorta(a.fecha_hasta)} · ${extras.join(" · ")} · objetivo <b>${euros(a.precio_objetivo)}</b>${personas(a) > 1 ? ` por persona (${euros(a.precio_objetivo * personas(a))} en total)` : ""}</p>
     </div>
     <div class="botones">
       <button class="boton" type="button" data-acc="revisar">Revisar ahora</button>
       <button class="boton boton-secundario" type="button" data-acc="objetivo">Cambiar objetivo</button>
+      <button class="boton boton-secundario" type="button" data-acc="personas">Personas</button>
       <button class="boton boton-secundario" type="button" data-acc="horas">Límite de horas</button>
       <button class="boton boton-secundario" type="button" data-acc="pausa">${a.activa ? "Pausar" : "Reanudar"}</button>
       <button class="boton boton-secundario boton-peligro" type="button" data-acc="borrar">Borrar</button>
@@ -415,7 +433,8 @@ function htmlCifras(d) {
     const delta = dif <= 0
       ? `<span class="delta bien">✓ ${euros(-dif)} por debajo de tu objetivo</span>`
       : `<span class="delta"><span class="punto aviso" aria-hidden="true"></span>${euros(dif)} por encima de tu objetivo</span>`;
-    heroe = `<div class="cifra heroe"><span class="etiqueta">Mejor precio en tus fechas</span><span class="valor">${euros(m.precio)}</span>${delta}</div>`;
+    const total = totalGrupo(m.precio, a);
+    heroe = `<div class="cifra heroe"><span class="etiqueta">Mejor precio en tus fechas${total ? " (por persona)" : ""}</span><span class="valor">${euros(m.precio)}</span>${total ? `<span class="delta">${total}</span>` : ""}${delta}</div>`;
   } else {
     heroe = `<div class="cifra heroe"><span class="etiqueta">Mejor precio en tus fechas</span><span class="valor">—</span><span class="delta">Sin vuelos que encajen</span></div>`;
   }
@@ -465,8 +484,10 @@ function htmlOpcion(c, elegida, a) {
       <p class="nota">Un único billete de ida y vuelta (la hora es la de la ida).</p>`;
   }
   const fuera = c.en_rango ? "" : ` <span class="meta">· fuera de tus fechas o de tu duración</span>`;
+  const total = totalGrupo(c.precio, a);
+  const grupo = total ? `<p class="nota"><b>${total}.</b>${avisoRyanair(c, a)}</p>` : "";
   return `<section class="tarjeta opcion" id="opcion">
-    <div class="cabecera"><h2>${titulo}: ${euros(c.precio)} · ${c.dias} días${fuera}</h2>${volver}</div>${cuerpo}</section>`;
+    <div class="cabecera"><h2>${titulo}: ${euros(c.precio)}${total ? " por persona" : ""} · ${c.dias} días${fuera}</h2>${volver}</div>${cuerpo}${grupo}</section>`;
 }
 
 function htmlAlternativas(u) {
@@ -519,8 +540,8 @@ function htmlRecord(d) {
        <span>Vuelta: ${quien(r.tramo_vuelta)} · ${escalasTxt(r.tramo_vuelta)}${dv ? ` · ${dv}` : ""} · ${euros(r.tramo_vuelta.precio)}</span>`
     : `<span>Un billete de ida y vuelta: ${quien(r.tramo_ida)} · ${escalasTxt(r.tramo_ida)}${di ? ` · ida ${di}` : ""}${dv ? `, vuelta ${dv}` : ""}</span>`;
   return `<div class="record">
-    <div class="record-precio"><span class="etiqueta">★ Mejor precio hasta ahora</span>
-      <span class="valor">${euros(r.precio)}</span><span class="nota">${objetivo}</span></div>
+    <div class="record-precio"><span class="etiqueta">★ Mejor precio hasta ahora${personas(a) > 1 ? " (por persona)" : ""}</span>
+      <span class="valor">${euros(r.precio)}</span>${personas(a) > 1 ? `<span class="nota">${totalGrupo(r.precio, a)}</span>` : ""}<span class="nota">${objetivo}</span></div>
     <div class="record-vuelo"><b>${fCorta(r.ida)} → ${fCorta(r.vuelta)} · ${r.dias} días</b>${tramos}
       <span class="nota">Visto por primera vez el ${fHora(r.inicio)} (${hace(r.inicio)}). ${hoy}${ver}</span></div>
   </div>`;
@@ -729,6 +750,12 @@ $("#detalle").addEventListener("click", async (e) => {
       const v = prompt("Máximo de horas por trayecto, con escalas (vacío = sin límite):", a.max_horas ?? "");
       if (v == null) return;
       await api(`/api/alertas/${a.id}`, { method: "PATCH", body: JSON.stringify({ max_horas: v.trim() }) });
+      await cargarAlertas(); await cargarDetalle();
+      refrescarEstado();
+    } else if (b.dataset.acc === "personas") {
+      const v = prompt("¿Cuántas personas viajan? (de 1 a 9; el objetivo sigue siendo por persona)", personas(a));
+      if (v == null || Number(v) === personas(a)) return;
+      await api(`/api/alertas/${a.id}`, { method: "PATCH", body: JSON.stringify({ personas: v.trim() }) });
       await cargarAlertas(); await cargarDetalle();
       refrescarEstado();
     } else if (b.dataset.acc === "pausa") {
