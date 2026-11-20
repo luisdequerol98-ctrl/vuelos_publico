@@ -138,6 +138,7 @@ legend { font-weight: 600; padding: 0 4px; font-size: 14px; }
 .boton-peligro { color: var(--critico); }
 .botones { display: flex; gap: 8px; flex-wrap: wrap; }
 .github-campos { display: grid; gap: 10px; }
+.estado-vacio .pasos { text-align: left; max-width: 620px; margin: 8px auto 0; font-size: 14px; gap: 6px; }
 .github-campos[hidden] { display: none; }
 .botones-fin { justify-content: flex-end; }
 

@@ -435,6 +435,15 @@ def revisar_alerta(a: dict, motivo: str) -> int | None:
     return rev_id
 
 
+def enlace_personal(chat: str | None) -> str | None:
+    """Enlace a la página pública de esa persona (solo en GitHub, donde están el repositorio y la llave)."""
+    import os
+    import nube
+    repo, clave = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("CLAVE_DATOS")
+    destino = chat or db.ajuste("telegram_chat_id", "")
+    return nube.enlace_personal(repo, clave, destino) if repo and clave and destino else None
+
+
 def comprobar_aviso(a: dict, res: dict) -> None:
     m = res["mejor"]
     if not m:
@@ -446,8 +455,9 @@ def comprobar_aviso(a: dict, res: dict) -> None:
     if a["ultimo_aviso_precio"] is not None and m["precio"] >= a["ultimo_aviso_precio"] - 0.5:
         return   # ya avisado de este precio o de uno mejor
     alts = alternativas(a, res, analisis_horario(a["id"]))
-    texto = avisos.mensaje(a, m, alts)
-    ok, detalle = avisos.enviar(texto)
+    chat = a.get("chat_id") or None          # sin chat: la alerta es tuya
+    texto = avisos.mensaje(a, m, alts, enlace_personal(chat))
+    ok, detalle = avisos.enviar(texto, chat)
     if not ok:
         # No se marca como avisado: en cuanto Telegram funcione, la siguiente revisión lo enviará.
         previo = db.uno("SELECT ok, precio FROM avisos WHERE alerta_id=? ORDER BY id DESC LIMIT 1", (a["id"],))

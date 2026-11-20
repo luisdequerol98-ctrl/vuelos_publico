@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS alertas(
   solo_directos INTEGER NOT NULL DEFAULT 0,
   max_horas REAL,                     -- máximo de horas por trayecto, con escalas (NULL = sin límite)
   personas INTEGER NOT NULL DEFAULT 1, -- adultos que viajan (los precios se guardan por persona)
+  chat_id TEXT,                       -- a quién avisar por Telegram (NULL = a ti, el dueño del bot)
+  quien TEXT,                         -- nombre de Telegram de quien la creó desde el bot
   activa INTEGER NOT NULL DEFAULT 1,
   creada TEXT NOT NULL,
   ultimo_aviso_precio REAL            -- evita repetir el mismo aviso
@@ -92,7 +94,8 @@ def conectar(ruta: Path | None = None) -> sqlite3.Connection:
 
 # Columnas añadidas después de la primera versión: se crean si la base es antigua.
 MIGRACIONES = {
-    "alertas": [("max_horas", "REAL"), ("personas", "INTEGER NOT NULL DEFAULT 1")],
+    "alertas": [("max_horas", "REAL"), ("personas", "INTEGER NOT NULL DEFAULT 1"),
+                ("chat_id", "TEXT"), ("quien", "TEXT")],
     "tarifas": [("duracion_min", "INTEGER"), ("duracion_vuelta_min", "INTEGER")],
 }
 

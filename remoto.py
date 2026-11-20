@@ -3,7 +3,11 @@
 Las revisiones las hace GitHub Actions aunque el PC esté apagado. Esta página:
 - baja de GitHub la base de datos con los resultados (rama «datos»),
 - guarda tus alertas en alertas.json (rama principal), lo que lanza su primera revisión,
-- pide revisiones al momento («Revisar ahora»).
+- pide revisiones al momento («Revisar ahora»),
+- sube el código, el bot de Telegram (bot.py) y la página pública (carpeta docs).
+
+El repositorio es público: alertas.json y la base de datos van cifrados con la llave de
+nube.json, que también se guarda en GitHub como secreto CLAVE_DATOS (ver cifrado.py).
 """
 from __future__ import annotations
 
@@ -18,6 +22,9 @@ import time
 from contextlib import closing
 from pathlib import Path
 
+import requests
+
+import cifrado
 import db
 import nube
 from github_api import GitHub
@@ -26,10 +33,11 @@ log = logging.getLogger("buscador.remoto")
 CARPETA = Path(__file__).parent
 CONFIG = CARPETA / "nube.json"
 RUTA_DB = CARPETA / "vuelos-nube.db"
-FLUJO = "revisar.yml"
+FLUJO = nube.FLUJO_REVISAR
 ARCHIVOS_CODIGO = ["app.py", "avisos.py", "db.py", "fuentes.py", "motor.py", "planificador.py",
-                   "nube.py", "github_api.py", "remoto.py", "requirements.txt", "README.md",
-                   "arrancar.bat", "static/index.html", "static/app.js", "static/estilo.css",
+                   "nube.py", "github_api.py", "remoto.py", "cifrado.py", "reglas.py", "informe.py",
+                   "bot.py", "requirements.txt", "README.md", "arrancar.bat",
+                   "static/index.html", "static/app.js", "static/estilo.css",
                    "static/aeropuertos.json", "herramientas/generar_aeropuertos.py"]
 
 _bloqueo = threading.RLock()
@@ -60,6 +68,11 @@ def cliente() -> GitHub:
 
 def rama() -> str:
     return (config() or {}).get("rama", "main")
+
+
+def clave() -> str | None:
+    """Llave maestra de los datos cifrados (None si aún no se ha subido el código con cifrado)."""
+    return (config() or {}).get("clave_datos")
 
 
 def usar_base_nube() -> None:
@@ -100,14 +113,18 @@ def _base_local_sin_secretos() -> bytes | None:
     return contenido
 
 
-def subir_secretos(gh: GitHub) -> list[str]:
+def subir_secretos(gh: GitHub, llave: str | None = None) -> list[str]:
     subidos = []
-    for nombre, clave in (("TELEGRAM_TOKEN", "telegram_token"), ("TELEGRAM_CHAT_ID", "telegram_chat_id"),
-                          ("AVIASALES_TOKEN", "aviasales_token")):
-        valor = db.ajuste(clave, "")
+    for nombre, clave_ajuste in (("TELEGRAM_TOKEN", "telegram_token"), ("TELEGRAM_CHAT_ID", "telegram_chat_id"),
+                                 ("AVIASALES_TOKEN", "aviasales_token")):
+        valor = db.ajuste(clave_ajuste, "")
         if valor:
             gh.guardar_secreto(nombre, valor)
             subidos.append(nombre)
+    llave = llave or clave()
+    if llave:
+        gh.guardar_secreto("CLAVE_DATOS", llave)
+        subidos.append("CLAVE_DATOS")
     _cache["secretos"] = None
     return subidos
 
@@ -122,44 +139,83 @@ def _vaciar_copia_nube() -> None:
     shutil.rmtree(carpeta, ignore_errors=True)
 
 
+def nombre_bot() -> str:
+    """@usuario del bot de Telegram (lo necesita la página pública para abrirlo)."""
+    token = db.ajuste("telegram_token", "")
+    if not token:
+        return ""
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=20).json()
+        return (r.get("result") or {}).get("username", "")
+    except Exception as e:
+        log.warning("No se pudo leer el nombre del bot: %s", type(e).__name__)
+        return ""
+
+
+def archivos_web(repo: str) -> dict[str, bytes]:
+    """La página pública (GitHub Pages, carpeta docs): la misma página que en tu PC, en «modo
+    público». Lee los datos cifrados de cada persona de la rama datos."""
+    est = CARPETA / "static"
+    indice = (est / "index.html").read_text(encoding="utf-8")
+    indice = indice.replace('href="/static/estilo.css"', 'href="estilo.css"').replace(
+        '<script src="/static/app.js"></script>', '<script src="config.js"></script>\n  <script src="app.js"></script>')
+    ajustes = {"bot": nombre_bot(), "datos": f"https://raw.githubusercontent.com/{repo}/datos/web/"}
+    return {
+        "docs/index.html": indice.encode("utf-8"),
+        "docs/config.js": f"window.BUSCADOR_PUBLICO = {json.dumps(ajustes)};\n".encode("utf-8"),
+        "docs/app.js": (est / "app.js").read_bytes(),
+        "docs/estilo.css": (est / "estilo.css").read_bytes(),
+        "docs/aeropuertos.json": (est / "aeropuertos.json").read_bytes(),
+        "docs/.nojekyll": b"",
+    }
+
+
 class RepoPublico(RuntimeError):
     """El repositorio es público y la persona aún no lo ha aceptado."""
 
 
 def conectar(repo: str, token: str, aceptar_publico: bool = False) -> dict:
-    """Comprueba el acceso, sube el código y el flujo, guarda los secretos y lanza la primera revisión.
-    Si ya había otro repositorio conectado, el nuevo empieza de cero y el flujo del anterior se
-    desactiva (para que no revisen los dos ni se gasten minutos)."""
+    """Comprueba el acceso, sube el código, los flujos y la página pública, guarda los secretos y
+    lanza la primera revisión. Si ya había otro repositorio conectado, el nuevo empieza de cero y
+    el flujo del anterior se desactiva (para que no revisen los dos ni se gasten minutos)."""
     gh = GitHub(repo, token)
     info = gh.info()
     anterior = config()
     cambio = bool(anterior) and anterior["repo"].lower() != info.get("full_name", repo).lower()
     if not info.get("private") and not aceptar_publico:
-        raise RepoPublico("El repositorio es público: cualquiera podrá ver tus alertas (origen, destino, "
-                          "fechas y precio objetivo), el historial de precios y el registro de cada "
-                          "revisión. Los tokens de Telegram y Aviasales siguen ocultos como secretos.")
+        raise RepoPublico("El repositorio es público: cualquiera podrá ver el código y que existe un buscador, "
+                          "pero las alertas, el historial y los datos de Telegram se guardan cifrados.")
     principal = info.get("default_branch") or "main"
     if gh.vacio():   # el primer archivo crea la rama principal
         gh.escribir("README.md", (CARPETA / "README.md").read_bytes(), "Primer commit [skip actions]")
         principal = gh.info().get("default_branch") or principal
 
+    # La llave se conserva mientras sea el mismo repositorio (si no, no se podrían leer sus datos).
+    llave = (None if cambio else (anterior or {}).get("clave_datos")) or cifrado.nueva_clave()
+    secretos = subir_secretos(gh, llave)   # antes del código: la próxima revisión ya necesita la llave
+
     archivos = {ruta: (CARPETA / ruta).read_bytes() for ruta in ARCHIVOS_CODIGO}
     archivos[f".github/workflows/{FLUJO}"] = nube.flujo_yaml(principal).encode("utf-8")
+    archivos[f".github/workflows/{nube.FLUJO_BOT}"] = nube.bot_yaml(principal).encode("utf-8")
+    archivos.update(archivos_web(gh.repo))
     alertas_remotas, _ = gh.leer_json("alertas.json", principal)
     if alertas_remotas is None:
-        archivos["alertas.json"] = json.dumps(_alertas_locales(), ensure_ascii=False, indent=2).encode("utf-8")
-    gh.subir_commit(archivos, "Buscador de vuelos: código y flujo [skip actions]", principal)
+        datos = _alertas_locales()
+    else:   # las que ya había (sin cifrar si eran de antes del cifrado)
+        datos = nube.abrir_alertas(alertas_remotas, llave)
+    archivos["alertas.json"] = json.dumps(nube.cerrar_alertas(datos, llave), ensure_ascii=False,
+                                          indent=2).encode("utf-8")
+    gh.subir_commit(archivos, "Buscador de vuelos: código, flujos y página pública [skip actions]", principal)
 
     historial = False
     if not gh.sha_rama("datos"):
         base = _base_local_sin_secretos()
         if base:
-            gh.rama_suelta("datos", {"vuelos.db": base}, "Datos iniciales (copiados del PC)")
+            gh.rama_suelta("datos", {"vuelos.db.cifrado": cifrado.cifrar(base, llave)}, "Datos iniciales (copiados del PC)")
             historial = True
 
-    secretos = subir_secretos(gh)
-    CONFIG.write_text(json.dumps({"repo": gh.repo, "token": token.strip(), "rama": principal},
-                                 indent=2), encoding="utf-8")
+    CONFIG.write_text(json.dumps({"repo": gh.repo, "token": token.strip(), "rama": principal,
+                                  "clave_datos": llave}, indent=2), encoding="utf-8")
     gh.lanzar(FLUJO, principal)
     anterior_parado = False
     if cambio:
@@ -167,8 +223,10 @@ def conectar(repo: str, token: str, aceptar_publico: bool = False) -> dict:
             _cache.update(sha_db=None, alertas=None, secretos=None, ultima_ejecucion=None)
             _vaciar_copia_nube()
         try:   # el nuevo ya funciona: el anterior deja de revisar
-            GitHub(anterior["repo"], anterior["token"]).desactivar_flujo(FLUJO)
+            viejo = GitHub(anterior["repo"], anterior["token"])
+            viejo.desactivar_flujo(FLUJO)
             anterior_parado = True
+            viejo.desactivar_flujo(nube.FLUJO_BOT)
         except Exception as e:
             log.warning("No se pudo desactivar el flujo de %s: %s", anterior["repo"], e)
     usar_base_nube()
@@ -182,6 +240,17 @@ def desconectar() -> None:
     if CONFIG.exists():
         CONFIG.rename(CONFIG.with_suffix(".json.desactivado"))
     db.RUTA = db.RUTA_AJUSTES
+
+
+def compartir() -> dict | None:
+    """Página pública y tu enlace personal (para Ajustes)."""
+    c = config()
+    if not c or not c.get("clave_datos"):
+        return None
+    chat = db.ajuste("telegram_chat_id", "")
+    return {"pagina": nube.pagina_publica(c["repo"]),
+            "enlace": nube.enlace_personal(c["repo"], c["clave_datos"], chat) if chat else None,
+            "ajustes_pages": f"https://github.com/{c['repo']}/settings/pages"}
 
 
 # ---------------------------------------------------------------- sincronizar
@@ -200,6 +269,15 @@ def _reemplazar_base(contenido: bytes) -> None:
     raise RuntimeError("No se pudo actualizar la copia local de la base de datos")
 
 
+def _bajar_base(gh: GitHub) -> bytes | None:
+    cifrada = gh.descargar("vuelos.db.cifrado", "datos")
+    if cifrada:
+        if not clave():
+            raise RuntimeError("La base de GitHub está cifrada y este PC no tiene la llave (nube.json)")
+        return cifrado.descifrar(cifrada, clave())
+    return gh.descargar("vuelos.db", "datos")   # de antes del cifrado
+
+
 def refrescar(forzar: bool = False) -> None:
     """Trae de GitHub los cambios (como mucho cada 30 s) y aplica alertas.json encima."""
     if not activo():
@@ -209,19 +287,20 @@ def refrescar(forzar: bool = False) -> None:
             return
         try:
             gh = cliente()
-            datos, _ = gh.leer_json("alertas.json", rama())
+            crudo, _ = gh.leer_json("alertas.json", rama())
+            datos = nube.abrir_alertas(crudo, clave())
             sha = gh.sha_rama("datos")
             if sha and sha != _cache["sha_db"]:
-                contenido = gh.descargar("vuelos.db", "datos")
+                contenido = _bajar_base(gh)
                 if contenido:
                     _reemplazar_base(contenido)
                 _cache["sha_db"] = sha
             usar_base_nube()
             db.iniciar(wal=False, ruta=RUTA_DB)
-            _cache["alertas"] = datos or {"revisiones_dia": 5, "alertas": []}
+            _cache["alertas"] = datos
             nube.sincronizar(_cache["alertas"])
-            _cache["activas"] = gh.ejecuciones_activas()
-            _cache["ultima_ejecucion"] = gh.ultima_ejecucion()
+            _cache["activas"] = gh.ejecuciones_activas(FLUJO)          # sin contar las del bot
+            _cache["ultima_ejecucion"] = gh.ultima_ejecucion(FLUJO)
             if _cache["secretos"] is None:
                 _cache["secretos"] = gh.secretos()
             _cache["error"] = None
@@ -232,13 +311,14 @@ def refrescar(forzar: bool = False) -> None:
 
 
 def modificar_alertas(cambio, mensaje: str) -> dict:
-    """Lee alertas.json de GitHub, aplica `cambio(datos)` y lo vuelve a guardar."""
+    """Lee alertas.json de GitHub, aplica `cambio(datos)` y lo vuelve a guardar (cifrado)."""
     with _bloqueo:
         gh = cliente()
-        datos, sha = gh.leer_json("alertas.json", rama())
-        datos = datos or {"revisiones_dia": 5, "alertas": []}
+        crudo, sha = gh.leer_json("alertas.json", rama())
+        datos = nube.abrir_alertas(crudo, clave())
         resultado = cambio(datos)
-        gh.escribir("alertas.json", json.dumps(datos, ensure_ascii=False, indent=2).encode("utf-8"),
+        guardar = nube.cerrar_alertas(datos, clave()) if clave() else datos
+        gh.escribir("alertas.json", json.dumps(guardar, ensure_ascii=False, indent=2).encode("utf-8"),
                     mensaje, sha, rama())
         _cache["alertas"] = datos
         nube.sincronizar(datos)

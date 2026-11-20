@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       alerta:
-        description: "Id de la alerta (vacío = todas)"
+        description: "Id de la alerta (vacío = todas; exportar = solo rehacer la página pública)"
         required: false
         default: ""
 
@@ -30,7 +30,7 @@ permissions:
 jobs:
   revisar:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 240
     env:
       TZ: Europe/Madrid
       EVENTO: ${{ github.event_name }}
@@ -53,24 +53,35 @@ jobs:
       - name: Traer la base de datos
         if: steps.decidir.outputs.revisar == 'si'
         run: |
-          if git fetch --depth=1 origin datos; then git show FETCH_HEAD:vuelos.db > vuelos.db; else echo "Primera revisión: base de datos nueva"; fi
+          if git fetch --depth=1 origin datos; then
+            git show FETCH_HEAD:vuelos.db.cifrado > vuelos.db.cifrado 2>/dev/null || rm -f vuelos.db.cifrado
+            if [ ! -s vuelos.db.cifrado ]; then rm -f vuelos.db.cifrado; git show FETCH_HEAD:vuelos.db > vuelos.db 2>/dev/null || rm -f vuelos.db; fi
+          else
+            echo "Primera revisión: base de datos nueva"
+          fi
       - name: Revisar precios
         if: steps.decidir.outputs.revisar == 'si'
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           AVIASALES_TOKEN: ${{ secrets.AVIASALES_TOKEN }}
+          CLAVE_DATOS: ${{ secrets.CLAVE_DATOS }}
         run: python nube.py revisar
       - name: Guardar la base de datos
         if: always() && steps.decidir.outputs.revisar == 'si'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test -f vuelos.db || exit 0
-          mkdir -p /tmp/datos && cp vuelos.db /tmp/datos/ && cd /tmp/datos
+          mkdir -p /tmp/datos
+          # Con la llave solo se guarda la base cifrada; la vuelos.db sin cifrar no sale de aquí.
+          if [ -f vuelos.db.cifrado ]; then cp vuelos.db.cifrado /tmp/datos/
+          elif [ -f vuelos.db ]; then cp vuelos.db /tmp/datos/
+          else exit 0; fi
+          if [ -d web ]; then cp -r web /tmp/datos/; fi
+          cd /tmp/datos
           git init -q -b datos
           git config user.name "buscador-vuelos"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add vuelos.db
+          git add -A
           git commit -q -m "Datos $(date '+%Y-%m-%d %H:%M')"
           git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" datos

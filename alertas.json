@@ -1,20 +1,5 @@
 {
+  "nota": "Alertas cifradas por el buscador de vuelos (cifrado.py).",
   "revisiones_dia": 5,
-  "alertas": [
-    {
-      "origen": "BCN",
-      "destino": "AHO",
-      "fecha_desde": "2027-06-01",
-      "fecha_hasta": "2027-06-30",
-      "dias": 5,
-      "flex": 3,
-      "precio_objetivo": 60.0,
-      "solo_directos": true,
-      "max_horas": null,
-      "personas": 5,
-      "activa": true,
-      "creada": "2026-11-19T17:27:04",
-      "id": 1
-    }
-  ]
+  "cifrado": "QlYxiyjb9at4lbFTPEnY+gIyBGqYFIe/lZx6UCU2zzTyKm1R6awq0E3C/7gFgDsyH0q51z4IKrwvOBTikBNXpNYKh5EoizGlTeDPs9R1mCg/tiRh7OyTdiU2VCIQ0reQhTr0SxPorowDSuGAj8eLCuPo3YaQ/G1jWEsVQIQ55CWdRTT9tMGtg60FrbVNGcFVAgWnFqtf9AYFJ2Rt7Jdv2Lo+a0hZo8TPLlIcblDECw6TcaamIG67vIwu6zngOYYRIXhmI6vOIBvgI6StkLW7YFgP9xdpD9f4Mc9Kqv7/r0wieeCZJhDbSnYX3U7i/oBc"
 }

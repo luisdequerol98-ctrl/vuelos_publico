@@ -34,79 +34,20 @@ from flask import Flask, jsonify, request, send_from_directory
 
 import avisos
 import db
+import informe
 import motor
 import nube
 import planificador
 import remoto
+from reglas import leer_max_horas, leer_personas, validar_alerta
 
 PUERTO = 5077
 CARPETA = Path(__file__).parent
 app = Flask(__name__, static_folder=str(CARPETA / "static"), static_url_path="/static")
-IATA = re.compile(r"^[A-Z]{3}$")
 
 
 def error(texto: str, codigo: int = 400):
     return jsonify({"error": texto}), codigo
-
-
-def leer_max_horas(valor) -> float | None:
-    """Vacío = sin límite. Lanza ValueError con un texto para la persona."""
-    if valor in (None, ""):
-        return None
-    try:
-        horas = float(str(valor).replace(",", "."))
-    except ValueError:
-        raise ValueError("El límite de horas tiene que ser un número.")
-    if not 1 <= horas <= 72:
-        raise ValueError("El límite de horas por trayecto va de 1 a 72 (o vacío para no tener límite).")
-    return horas
-
-
-def leer_personas(valor) -> int:
-    """Vacío = 1. Lanza ValueError con un texto para la persona."""
-    if valor in (None, ""):
-        return 1
-    try:
-        n = int(str(valor).strip())
-    except ValueError:
-        raise ValueError("El número de personas tiene que ser un número entero.")
-    if not 1 <= n <= nube.MAX_PERSONAS:
-        raise ValueError(f"Pueden viajar de 1 a {nube.MAX_PERSONAS} personas por alerta.")
-    return n
-
-
-def validar_alerta(d: dict) -> dict:
-    """Comprueba el formulario. Lanza ValueError con el motivo."""
-    origen = str(d.get("origen", "")).strip().upper()
-    destino = str(d.get("destino", "")).strip().upper()
-    if not IATA.match(origen) or not IATA.match(destino):
-        raise ValueError("Origen y destino deben ser códigos de aeropuerto de 3 letras (p. ej. BCN, LIS).")
-    if origen == destino:
-        raise ValueError("El origen y el destino son el mismo aeropuerto.")
-    try:
-        desde = date.fromisoformat(d.get("fecha_desde", ""))
-        hasta = date.fromisoformat(d.get("fecha_hasta", ""))
-        dias = int(d.get("dias"))
-        flex = int(d.get("flex") or 0)
-        objetivo = float(str(d.get("precio_objetivo")).replace(",", "."))
-    except (TypeError, ValueError):
-        raise ValueError("Revisa las fechas, los días y el precio.")
-    if desde < date.today() + timedelta(days=1):
-        raise ValueError("La primera fecha tiene que ser a partir de mañana.")
-    if hasta <= desde:
-        raise ValueError("La fecha final tiene que ser posterior a la inicial.")
-    if (hasta - desde).days > 120:
-        raise ValueError("El rango máximo es de 120 días; divide la búsqueda en dos alertas.")
-    if not 1 <= dias <= (hasta - desde).days:
-        raise ValueError(f"Los días en destino tienen que estar entre 1 y {(hasta - desde).days} (lo que cabe en tu rango).")
-    if not 0 <= flex <= 7:
-        raise ValueError("La flexibilidad va de 0 a 7 días.")
-    if objetivo <= 0:
-        raise ValueError("El precio objetivo tiene que ser mayor que 0.")
-    return {"origen": origen, "destino": destino, "fecha_desde": desde.isoformat(),
-            "fecha_hasta": hasta.isoformat(), "dias": dias, "flex": flex, "precio_objetivo": objetivo,
-            "solo_directos": bool(d.get("solo_directos")), "max_horas": leer_max_horas(d.get("max_horas")),
-            "personas": leer_personas(d.get("personas")), "activa": True, "creada": motor.ahora_iso()}
 
 
 # ---------------------------------------------------------------- página
@@ -118,32 +59,10 @@ def portada():
 
 # ---------------------------------------------------------------- alertas
 
-def _resumen(a: dict) -> dict:
-    ultima = db.uno("SELECT inicio, mejor_precio, errores FROM revisiones WHERE alerta_id=? "
-                    "AND fin IS NOT NULL ORDER BY inicio DESC LIMIT 1", (a["id"],))
-    n = db.uno("SELECT COUNT(*) AS n FROM revisiones WHERE alerta_id=? AND fin IS NOT NULL",
-               (a["id"],))["n"]
-    # El mejor precio hasta ahora y la primera vez que se vio.
-    mejor = db.uno("SELECT inicio, mejor_precio FROM revisiones WHERE alerta_id=? AND fin IS NOT NULL "
-                   "AND mejor_precio IS NOT NULL ORDER BY mejor_precio, inicio LIMIT 1", (a["id"],))
-    return {**a, "ultima": ultima, "revisiones": n,
-            "minimo": mejor["mejor_precio"] if mejor else None,
-            "minimo_fecha": mejor["inicio"] if mejor else None}
-
-
-def _vuelo(m: dict | None) -> dict | None:
-    """Lo justo para describir en el historial el vuelo más barato de una revisión."""
-    if not m:
-        return None
-    tramo = lambda t: {k: t.get(k) for k in ("fuente", "aerolinea", "escalas", "precio")} if t else None
-    return {"ida": m["ida"], "vuelta": m["vuelta"], "dias": m["dias"], "tipo": m["tipo"],
-            "tramo_ida": tramo(m.get("tramo_ida")), "tramo_vuelta": tramo(m.get("tramo_vuelta"))}
-
-
 @app.get("/api/alertas")
 def listar():
     remoto.refrescar()
-    return jsonify([_resumen(a) for a in db.q("SELECT * FROM alertas ORDER BY activa DESC, id DESC")])
+    return jsonify([informe.resumen(a) for a in db.q("SELECT * FROM alertas ORDER BY activa DESC, id DESC")])
 
 
 @app.post("/api/alertas")
@@ -154,8 +73,10 @@ def crear():
         return error(str(e))
     if remoto.activo():
         def anadir(datos):
+            # ultimo_id: el número de una alerta borrada no se repite (su historial se mezclaría)
             ids = [a["id"] for a in datos["alertas"]] + [a["id"] for a in db.q("SELECT id FROM alertas")]
-            nueva["id"] = max(ids, default=0) + 1
+            nueva["id"] = max(ids + [int(datos.get("ultimo_id") or 0)], default=0) + 1
+            datos["ultimo_id"] = nueva["id"]
             datos["alertas"].append(nueva)
             return nueva["id"]
         try:
@@ -164,8 +85,9 @@ def crear():
             return error(f"No se pudo guardar en GitHub: {e}")
         return jsonify({"id": nuevo})
     campos = [c for c in nube.CAMPOS]
+    valores = [nueva.get(c) for c in campos]   # sin chat_id: avisa a tu chat
     nuevo = db.ex(f"INSERT INTO alertas({', '.join(campos)}) VALUES({', '.join('?' * len(campos))})",
-                  tuple(int(nueva[c]) if isinstance(nueva[c], bool) else nueva[c] for c in campos))
+                  tuple(int(v) if isinstance(v, bool) else v for v in valores))
     motor.encolar(nuevo, "manual")
     return jsonify({"id": nuevo})
 
@@ -249,20 +171,7 @@ def detalle(alerta_id: int):
     a = db.uno("SELECT * FROM alertas WHERE id=?", (alerta_id,))
     if not a:
         return error("No existe esa alerta.", 404)
-    historial = db.q("SELECT id, inicio, motivo, mejor_precio, mejor_json, por_fuente_json, errores, "
-                     "n_tarifas FROM revisiones WHERE alerta_id=? AND fin IS NOT NULL ORDER BY inicio",
-                     (alerta_id,))
-    record = None   # el vuelo más barato visto hasta ahora (la primera vez que salió a ese precio)
-    for h in historial:
-        h["por_fuente"] = json.loads(h.pop("por_fuente_json") or "{}")
-        m = json.loads(h.pop("mejor_json") or "null")
-        h["vuelo"] = _vuelo(m)
-        if m and h["mejor_precio"] is not None and (record is None or h["mejor_precio"] < record["precio"]):
-            record = {**m, "precio": h["mejor_precio"], "revision_id": h["id"], "inicio": h["inicio"]}
-    avs = db.q("SELECT enviado, precio, ok, detalle FROM avisos WHERE alerta_id=? ORDER BY enviado DESC",
-               (alerta_id,))
-    return jsonify({"alerta": _resumen(a), "historial": historial, "record": record,
-                    "ultima": motor.detalle_ultima(a), "avisos": avs})
+    return jsonify(informe.detalle(a))
 
 
 # ---------------------------------------------------------------- estado y ajustes
@@ -291,7 +200,8 @@ def ver_ajustes():
     datos = {"telegram_token": _mascara(tg) if tg else "", "telegram_chat_id": db.ajuste("telegram_chat_id", ""),
              "aviasales_token": _mascara(av) if av else "",
              **{k: db.ajuste(k) for k in db.AJUSTES_POR_DEFECTO},
-             "github": {"conectado": bool(conf), "repo": conf["repo"] if conf else ""}}
+             "github": {"conectado": bool(conf), "repo": conf["repo"] if conf else ""},
+             "compartir": remoto.compartir()}
     if conf:
         datos["revisiones_dia"] = remoto.estado()["revisiones_dia"]
     return jsonify(datos)

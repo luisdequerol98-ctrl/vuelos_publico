@@ -74,6 +74,7 @@
           <label class="casilla"><input name="solo_directos" type="checkbox"> Solo vuelos directos</label>
           <p class="ayuda">Ida el 10 y vuelta el 15 = 5 días. El límite de horas se aplica a la ida y a la vuelta por separado, contando las esperas en las escalas. También se miran 5 días antes y después de tu rango y 2 días de más o de menos, para proponerte alternativas.</p>
           <p id="form-error" class="mensaje-error" role="alert" hidden></p>
+          <p id="form-ok" class="mensaje" role="status" hidden></p>
           <button class="boton" type="submit">Crear alerta y buscar</button>
         </form>
       </section>
@@ -134,6 +135,18 @@
           <button class="boton boton-secundario" type="button" id="btn-github-cambiar" hidden>Cambiar a otro repositorio</button>
           <button class="boton boton-secundario boton-peligro" type="button" id="btn-github-off" hidden>Volver al modo local</button>
         </div>
+      </fieldset>
+
+      <fieldset id="compartir" hidden>
+        <legend>Compartir</legend>
+        <p class="ayuda">Quien tenga la página pública puede crear sus alertas: se abre tu bot de Telegram, los avisos le llegan a su chat y el bot le envía su enlace personal para ver sus gráficos e historial. Máximo 3 alertas activas por persona y 15 en total.</p>
+        <label>Página pública (la que compartes)
+          <input id="enlace-publico" readonly>
+        </label>
+        <label>Tu enlace personal (tus alertas en la página pública; no lo compartas)
+          <input id="enlace-personal" readonly>
+        </label>
+        <p class="ayuda">Si la página pública no abre, actívala una vez: <a id="enlace-pages" href="#" target="_blank" rel="noopener">Settings → Pages</a> del repositorio → <i>Source</i>: <i>Deploy from a branch</i> → rama <b>main</b>, carpeta <b>/docs</b> → <i>Save</i>. Tarda un par de minutos.</p>
       </fieldset>
 
       <fieldset>

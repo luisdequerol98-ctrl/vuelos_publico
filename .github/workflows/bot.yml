@@ -1,0 +1,55 @@
+name: Bot de Telegram
+# Generado por el buscador de vuelos (nube.py). Lee los mensajes del bot y contesta (bot.py).
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: bot-telegram
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+    steps:
+      - name: ¿Hay mensajes?
+        id: mensajes
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'FIN'
+          import json, os, urllib.request
+          token = os.environ.get("TELEGRAM_TOKEN", "")
+          hay = False
+          if token:
+              url = f"https://api.telegram.org/bot{token}/getUpdates?limit=1&timeout=0"
+              with urllib.request.urlopen(url, timeout=20) as r:
+                  hay = bool(json.load(r).get("result"))
+          print("hay=" + ("si" if hay else "no"))
+          FIN
+      - uses: actions/checkout@v5
+        if: steps.mensajes.outputs.hay == 'si'
+        with:
+          ref: main
+      - name: Preparar Python
+        if: steps.mensajes.outputs.hay == 'si'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        if: steps.mensajes.outputs.hay == 'si'
+        run: pip install requests cryptography
+      - name: Contestar
+        if: steps.mensajes.outputs.hay == 'si'
+        env:
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CLAVE_DATOS: ${{ secrets.CLAVE_DATOS }}
+          GH_TOKEN: ${{ github.token }}
+          RAMA: main
+        run: python bot.py

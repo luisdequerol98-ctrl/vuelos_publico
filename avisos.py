@@ -15,8 +15,9 @@ def configurado() -> bool:
     return bool(db.ajuste("telegram_token", "") and db.ajuste("telegram_chat_id", ""))
 
 
-def enviar(texto: str) -> tuple[bool, str]:
-    token, chat = db.ajuste("telegram_token", ""), db.ajuste("telegram_chat_id", "")
+def enviar(texto: str, chat: str | None = None) -> tuple[bool, str]:
+    """Envía a ese chat; sin chat, al tuyo (el dueño del bot)."""
+    token, chat = db.ajuste("telegram_token", ""), chat or db.ajuste("telegram_chat_id", "")
     if not token or not chat:
         return False, "Telegram sin configurar: el aviso solo se ve en la página."
     try:
@@ -45,18 +46,7 @@ def detectar_chat(token: str) -> str | None:
     return None
 
 
-DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
-MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
-
-
-def fecha_corta(iso: str) -> str:
-    from datetime import date
-    d = date.fromisoformat(iso)
-    return f"{DIAS[d.weekday()]} {d.day} {MESES[d.month - 1]}"
-
-
-def euros(x: float) -> str:
-    return f"{x:,.0f} €".replace(",", ".") if x == round(x) else f"{x:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
+from reglas import euros, fecha_corta  # noqa: E402,F401  (también los usa motor.py)
 
 
 def duracion_txt(minutos: int | None, estimada: bool = False) -> str:
@@ -80,7 +70,7 @@ def _linea_tramo(icono: str, nombre: str, fecha: str, t: dict) -> str:
     return f"{icono} {nombre}: " + " · ".join(partes)
 
 
-def mensaje(alerta: dict, combo: dict, alternativas: list[dict]) -> str:
+def mensaje(alerta: dict, combo: dict, alternativas: list[dict], enlace: str | None = None) -> str:
     personas = max(1, int(alerta.get("personas") or 1))
     if personas == 1:
         precio = f"<b>{euros(combo['precio'])}</b> ida y vuelta (objetivo {euros(alerta['precio_objetivo'])})"
@@ -120,4 +110,7 @@ def mensaje(alerta: dict, combo: dict, alternativas: list[dict]) -> str:
         lineas.append("")
         lineas.append(f"💡 Aún más barato: {escape(a['titulo'])} → {euros(a['precio'])} "
                       f"(−{euros(a['ahorro'])})")
+    if enlace:
+        lineas.append("")
+        lineas.append(f'📊 <a href="{escape(enlace)}">Gráficos e historial de tus alertas</a>')
     return "\n".join(lineas)

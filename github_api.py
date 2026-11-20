@@ -145,16 +145,19 @@ class GitHub:
                     raise
                 time.sleep(4)   # un flujo recién subido tarda unos segundos en estar disponible
 
-    def ejecuciones_activas(self) -> int:
+    def _runs(self, flujo: str | None) -> str:
+        return f"/actions/workflows/{flujo}/runs" if flujo else "/actions/runs"
+
+    def ejecuciones_activas(self, flujo: str | None = None) -> int:
         total = 0
         for estado in ("in_progress", "queued"):
-            r = self._pedir("GET", "/actions/runs", params={"status": estado, "per_page": 1})
-            total += r.json().get("total_count", 0)
+            r = self._pedir("GET", self._runs(flujo), params={"status": estado, "per_page": 1}, aceptar=(200, 404))
+            total += r.json().get("total_count", 0) if r.status_code == 200 else 0
         return total
 
-    def ultima_ejecucion(self) -> dict | None:
-        r = self._pedir("GET", "/actions/runs", params={"per_page": 1})
-        runs = r.json().get("workflow_runs") or []
+    def ultima_ejecucion(self, flujo: str | None = None) -> dict | None:
+        r = self._pedir("GET", self._runs(flujo), params={"per_page": 1}, aceptar=(200, 404))
+        runs = (r.json().get("workflow_runs") or []) if r.status_code == 200 else []
         return runs[0] if runs else None
 
     # ------------------------------------------------------------ secretos

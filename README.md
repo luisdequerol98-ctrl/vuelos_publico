@@ -22,6 +22,13 @@ El **límite de horas** se aplica a la ida y a la vuelta por separado y cuenta l
 en las escalas. Si quitarlo sale más barato, la página lo propone como alternativa
 («Aceptar trayectos de hasta 30 h: −51 €»).
 
+**Personas que viajan** (1 a 9 adultos): el objetivo y todos los precios son por persona, y
+la página y el aviso de Telegram enseñan también el total del grupo. Google Flights y Wizz
+Air buscan con plazas para todos (si la tarifa más barata solo tiene 1 plaza, se ve la
+siguiente). Ryanair no admite pasajeros en su consulta de precios por día: da la plaza más
+barata, y para un grupo puede salir algo más caro; su enlace ya abre la reserva para todos.
+Se cambia en cada alerta con el botón «Personas».
+
 Las revisiones se hacen solas **5 veces al día a horas aleatorias** (se sortean cada
 medianoche, separadas al menos 2 h). Solo se hacen si el ordenador está encendido y
 la aplicación abierta. Si a una hora sorteada el equipo estaba apagado o suspendido

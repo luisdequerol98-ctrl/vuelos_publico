@@ -59,7 +59,111 @@ function hace(iso) {
   return `hace ${d} día${d > 1 ? "s" : ""}`;
 }
 
+/* ===================================================================== página pública */
+// En GitHub Pages no hay servidor: config.js define BUSCADOR_PUBLICO = {bot, datos}. Los datos de
+// cada persona están cifrados en GitHub (nube.exportar_web) y se abren aquí con la llave de su
+// enlace personal (#u=archivo&k=llave), que el navegador no envía a ningún servidor.
+const PUBLICO = window.BUSCADOR_PUBLICO || null;
+const BASE_ESTATICOS = PUBLICO ? "" : "/static/";
+const pub = { enlace: null, paquete: null, cargado: 0, error: null };
+
+function enlacePersonal() {
+  const leer = (h) => {
+    const p = new URLSearchParams(String(h || "").replace(/^#/, ""));
+    return p.get("u") && p.get("k") ? { u: p.get("u"), k: p.get("k") } : null;
+  };
+  let e = leer(location.hash);
+  try {
+    if (e) {
+      localStorage.setItem("buscador-enlace", JSON.stringify(e));
+      // Que la barra de direcciones no enseñe la llave: así compartir la página no comparte tus datos.
+      history.replaceState(null, "", location.pathname + location.search);
+    } else {
+      e = JSON.parse(localStorage.getItem("buscador-enlace") || "null");
+    }
+  } catch (x) { /* sin almacenamiento: vale el enlace mientras esté en la barra */ }
+  return e;
+}
+
+const deBase64url = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+
+// Formato de cifrado.py: "BV1" + nonce (12 bytes) + AES-256-GCM(gzip(JSON)).
+async function descifrarPaquete(bytes, llave) {
+  if (new TextDecoder().decode(bytes.slice(0, 3)) !== "BV1") throw new Error("formato desconocido");
+  const k = await crypto.subtle.importKey("raw", deBase64url(llave), "AES-GCM", false, ["decrypt"]);
+  const gz = await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.slice(3, 15) }, k, bytes.slice(15));
+  const flujo = new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return JSON.parse(await new Response(flujo).text());
+}
+
+async function cargarPaquete(forzar = false) {
+  if (!pub.enlace) return null;
+  if (!forzar && pub.cargado && Date.now() - pub.cargado < 110000) return pub.paquete;
+  try {
+    const r = await fetch(`${PUBLICO.datos}${encodeURIComponent(pub.enlace.u)}.bin?v=${Math.floor(Date.now() / 120000)}`, { cache: "no-store" });
+    if (r.status === 404) {
+      pub.paquete = null;
+      pub.error = "Tus alertas aparecerán aquí después de su primera búsqueda (entre 5 y 15 minutos desde que el bot te la confirma).";
+    } else if (!r.ok) {
+      throw new Error(`código ${r.status}`);
+    } else {
+      pub.paquete = await descifrarPaquete(new Uint8Array(await r.arrayBuffer()), pub.enlace.k);
+      pub.error = null;
+    }
+  } catch (e) {
+    if (!pub.paquete) pub.error = "No se pueden abrir tus datos. Abre otra vez el enlace personal que te envió el bot (cópialo entero).";
+  }
+  pub.cargado = Date.now();
+  return pub.paquete;
+}
+
+async function apiPublica(ruta, opciones = {}) {
+  const metodo = (opciones.method || "GET").toUpperCase();
+  if (metodo === "GET" && ruta === "/api/estado") {
+    const p = await cargarPaquete();
+    return { modo: "publico", ultima_fin: p?.generado || null, ocupado: false, pendientes: 0 };
+  }
+  if (metodo === "GET" && ruta === "/api/alertas") return (await cargarPaquete())?.alertas || [];
+  const m = ruta.match(/^\/api\/alertas\/(\d+)$/);
+  if (metodo === "GET" && m) {
+    const d = (await cargarPaquete())?.detalles?.[m[1]];
+    if (!d) throw new Error("No existe esa alerta.");
+    return d;
+  }
+  throw new Error("Desde esta página no se puede: escribe /alertas al bot de Telegram.");
+}
+
+const enlaceBot = () => (PUBLICO?.bot
+  ? `<a href="https://t.me/${esc(PUBLICO.bot)}" target="_blank" rel="noopener">@${esc(PUBLICO.bot)}</a>` : "el bot");
+
+// La alerta viaja dentro del enlace del bot (t.me/<bot>?start=<código>); ver reglas.codigo_alerta.
+function codigoAlerta(d) {
+  const aammdd = (iso) => iso.slice(2, 4) + iso.slice(5, 7) + iso.slice(8, 10);
+  const medias = d.max_horas ? Math.round(Number(String(d.max_horas).replace(",", ".")) * 2) : 0;
+  return [d.origen, d.destino, aammdd(d.fecha_desde), aammdd(d.fecha_hasta), Number(d.dias), Number(d.flex || 0),
+    Number(d.personas || 1), Math.round(Number(d.precio_objetivo)), medias, d.solo_directos ? 1 : 0].join("_");
+}
+
+// Las mismas reglas que reglas.validar_alerta, para no esperar 10 minutos a que el bot diga que algo falla.
+function validarPublico(d) {
+  if (!d.fecha_desde || !d.fecha_hasta) return "Indica el primer día de ida y el último de vuelta.";
+  const f1 = fecha(d.fecha_desde), f2 = fecha(d.fecha_hasta), rango = Math.round((f2 - f1) / 86400000);
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  if (f1 <= hoy) return "La primera fecha tiene que ser a partir de mañana.";
+  if (rango <= 0) return "La fecha final tiene que ser posterior a la inicial.";
+  if (rango > 120) return "El rango máximo es de 120 días; divide la búsqueda en dos alertas.";
+  const dias = Number(d.dias);
+  if (!(Number.isInteger(dias) && dias >= 1 && dias <= rango)) return `Los días en destino tienen que estar entre 1 y ${rango}.`;
+  if (!(Number(d.precio_objetivo) > 0)) return "Indica el precio objetivo por persona.";
+  const n = Number(d.personas || 1);
+  if (!(Number.isInteger(n) && n >= 1 && n <= 9)) return "Pueden viajar de 1 a 9 personas.";
+  const h = Number(String(d.max_horas || "").replace(",", "."));
+  if (d.max_horas && !(h >= 1 && h <= 72)) return "El límite de horas por trayecto va de 1 a 72.";
+  return null;
+}
+
 async function api(ruta, opciones = {}) {
+  if (PUBLICO) return apiPublica(ruta, opciones);
   const r = await fetch(ruta, { headers: { "Content-Type": "application/json" }, ...opciones });
   const datos = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(datos.error || `Error ${r.status}`), { codigo: datos.codigo });
@@ -68,6 +172,13 @@ async function api(ruta, opciones = {}) {
 
 /* ===================================================================== estado del servidor */
 function pintarEstado(s) {
+  if (s.modo === "publico") {
+    const datos = !pub.enlace ? ""
+      : s.ultima_fin ? `<span class="grupo"><span class="punto bien"></span>Datos de tus alertas: ${hace(s.ultima_fin)}</span>`
+      : `<span class="grupo"><span class="punto aviso"></span>Tus datos aún no están disponibles</span>`;
+    $("#estado").innerHTML = `${datos}<span class="grupo">Avisos por Telegram con ${enlaceBot()}</span>`;
+    return;
+  }
   const fichas = (s.plan_hoy || []).map((p) => {
     const h = p.hora.slice(11, 16);
     const icono = { hecha: "✓", pendiente: "◷", perdida: "✕" }[p.estado] || "";
@@ -102,6 +213,9 @@ function pintarEstado(s) {
 }
 
 function progresoDetalle(s) {
+  if (s.modo === "publico") {
+    return `<p class="nota">La primera búsqueda tarda entre 5 y 15 minutos. Esta página se actualiza sola.</p>`;
+  }
   if (s.modo === "nube") {
     return s.ocupado
       ? `<progress style="width:240px"></progress><p class="nota">GitHub está revisando. La página se actualizará sola al terminar.</p>`
@@ -135,7 +249,7 @@ async function refrescarEstado() {
 async function sondear() {   // bucle único de consulta del estado
   await refrescarEstado();
   const rapido = est.servidor && (est.servidor.ocupado || est.servidor.pendientes);
-  setTimeout(sondear, rapido ? 2500 : 15000);
+  setTimeout(sondear, PUBLICO ? 120000 : rapido ? 2500 : 15000);
 }
 
 /* ===================================================================== alertas */
@@ -154,7 +268,7 @@ async function cargarAlertas() {
       : `<span class="precio meta">${a.revisiones ? "sin vuelos" : "buscando…"}</span>`;
     return `<li><button type="button" data-id="${a.id}" aria-current="${a.id === est.sel}" class="${a.activa ? "" : "pausada"}">
       <span class="ruta"><span>${esc(etiquetaAeropuerto(a.origen, true))} → ${esc(etiquetaAeropuerto(a.destino, true))}${a.activa ? "" : " · en pausa"}</span>${precio}</span>
-      <span class="meta">${fCorta(a.fecha_desde)} – ${fCorta(a.fecha_hasta)} · ${a.dias} días${a.flex ? ` ±${a.flex}` : ""}${personas(a) > 1 ? ` · ${personas(a)} personas` : ""} · objetivo ${euros(a.precio_objetivo)}${personas(a) > 1 ? " p. p." : ""}</span>
+      <span class="meta">${fCorta(a.fecha_desde)} – ${fCorta(a.fecha_hasta)} · ${a.dias} días${a.flex ? ` ±${a.flex}` : ""}${personas(a) > 1 ? ` · ${personas(a)} personas` : ""} · objetivo ${euros(a.precio_objetivo)}${personas(a) > 1 ? " p. p." : ""}${!PUBLICO && a.quien ? ` · de ${esc(a.quien)}` : ""}</span>
       ${a.minimo != null ? `<span class="meta">★ Mejor hasta ahora: <b>${euros(a.minimo)}</b> el ${fHora(a.minimo_fecha)}</span>` : ""}
     </button></li>`;
   }).join("");
@@ -185,6 +299,19 @@ async function cargarDetalle() {
 
 function pintarVacio() {
   destruirGraficos();
+  if (PUBLICO) {
+    const aviso = pub.enlace && pub.error ? `<p class="aviso-caja">${esc(pub.error)}</p>` : "";
+    $("#detalle").innerHTML = `<div class="tarjeta estado-vacio">
+      <h2>${pub.enlace ? "Tus alertas" : "Avisos de vuelos baratos"}</h2>${aviso}
+      <ol class="pasos">
+        <li>Indica a la izquierda destino, fechas, días, cuántas personas viajáis y el precio que quieres pagar.</li>
+        <li>Pulsa <b>Crear alerta en Telegram</b>: se abre ${enlaceBot()}. Pulsa <b>Iniciar</b>.</li>
+        <li>En unos 10 minutos el bot te confirma la alerta y te envía tu <b>enlace personal</b>, con el que verás aquí tus alertas, gráficos e historial.</li>
+        <li>Después consulta Google Flights, Ryanair y Wizz Air varias veces al día, a horas al azar, y te escribe cuando encuentre tu precio.</li>
+      </ol>
+    </div>`;
+    return;
+  }
   $("#detalle").innerHTML = `<div class="tarjeta estado-vacio">
     <h2>Crea una alerta para empezar</h2>
     <p>Indica destino, fechas, días y el precio que quieres pagar. El buscador consultará Google Flights, Ryanair y Wizz Air 5 veces al día, a horas al azar, y te escribirá por Telegram cuando encuentre tu precio.</p>
@@ -199,7 +326,7 @@ const normal = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").t
 
 async function cargarAeropuertos() {
   try {
-    const filas = await (await fetch("/static/aeropuertos.json")).json();
+    const filas = await (await fetch(`${BASE_ESTATICOS}aeropuertos.json`)).json();
     let paises = null;
     try { paises = new Intl.DisplayNames(["es"], { type: "region" }); } catch (e) { /* navegador antiguo */ }
     const nombrePais = new Map(), porCiudad = new Map();
@@ -349,6 +476,17 @@ const selectores = {};
     const fd = new FormData(f);
     const datos = Object.fromEntries(fd.entries());
     datos.solo_directos = fd.get("solo_directos") === "on";
+    if (PUBLICO) {   // la página pública no guarda nada: abre el bot con la alerta en el enlace
+      const fallo = !PUBLICO.bot ? "El bot de Telegram todavía no está configurado." : validarPublico(datos);
+      if (fallo) { err.textContent = fallo; err.hidden = false; return; }
+      err.hidden = true;
+      const enlace = `https://t.me/${encodeURIComponent(PUBLICO.bot)}?start=${codigoAlerta(datos)}`;
+      window.open(enlace, "_blank", "noopener");
+      const ok = $("#form-ok");
+      ok.innerHTML = `Se ha abierto Telegram: pulsa <b>Iniciar</b>. En unos 10 minutos el bot te confirmará la alerta y te enviará tu enlace personal. ¿No se ha abierto? <a href="${esc(enlace)}" target="_blank" rel="noopener">Abrir el bot</a>.`;
+      ok.hidden = false;
+      return;
+    }
     const boton = f.querySelector("button[type=submit]");
     boton.disabled = true;
     try {
@@ -409,19 +547,23 @@ function htmlCabecera(a) {
   if (personas(a) > 1) extras.push(`${personas(a)} personas`);
   if (a.solo_directos) extras.push("solo directos");
   if (a.max_horas) extras.push(`máx. ${String(a.max_horas).replace(".", ",")} h por trayecto`);
-  return `<section class="tarjeta cabecera">
-    <div>
-      <h1>${esc(etiquetaAeropuerto(a.origen))} → ${esc(etiquetaAeropuerto(a.destino))}${a.activa ? "" : " · en pausa"}</h1>
-      <p class="sub">Ida desde el ${fCorta(a.fecha_desde)} · vuelta hasta el ${fCorta(a.fecha_hasta)} · ${extras.join(" · ")} · objetivo <b>${euros(a.precio_objetivo)}</b>${personas(a) > 1 ? ` por persona (${euros(a.precio_objetivo * personas(a))} en total)` : ""}</p>
-    </div>
-    <div class="botones">
+  if (!PUBLICO && a.quien) extras.push(`creada por ${esc(a.quien)} desde el bot`);
+  const botones = PUBLICO
+    ? `<p class="nota">Para pausar o borrar esta alerta, escribe <b>/alertas</b> a ${enlaceBot()}.</p>`
+    : `<div class="botones">
       <button class="boton" type="button" data-acc="revisar">Revisar ahora</button>
       <button class="boton boton-secundario" type="button" data-acc="objetivo">Cambiar objetivo</button>
       <button class="boton boton-secundario" type="button" data-acc="personas">Personas</button>
       <button class="boton boton-secundario" type="button" data-acc="horas">Límite de horas</button>
       <button class="boton boton-secundario" type="button" data-acc="pausa">${a.activa ? "Pausar" : "Reanudar"}</button>
       <button class="boton boton-secundario boton-peligro" type="button" data-acc="borrar">Borrar</button>
+    </div>`;
+  return `<section class="tarjeta cabecera">
+    <div>
+      <h1>${esc(etiquetaAeropuerto(a.origen))} → ${esc(etiquetaAeropuerto(a.destino))}${a.activa ? "" : " · en pausa"}</h1>
+      <p class="sub">Ida desde el ${fCorta(a.fecha_desde)} · vuelta hasta el ${fCorta(a.fecha_hasta)} · ${extras.join(" · ")} · objetivo <b>${euros(a.precio_objetivo)}</b>${personas(a) > 1 ? ` por persona (${euros(a.precio_objetivo * personas(a))} en total)` : ""}</p>
     </div>
+    ${botones}
   </section>`;
 }
 
@@ -1012,6 +1154,13 @@ $("#btn-github-cambiar").addEventListener("click", () => {
 async function abrirAjustes() {
   const a = await api("/api/ajustes");
   pintarGithub(a.github);
+  const c = a.compartir;
+  $("#compartir").hidden = !c;
+  if (c) {
+    $("#enlace-publico").value = c.pagina;
+    $("#enlace-personal").value = c.enlace || "";
+    $("#enlace-pages").href = c.ajustes_pages;
+  }
   fa.github_token.value = "";
   fa.telegram_token.value = ""; fa.telegram_token.placeholder = a.telegram_token || "123456789:AA…";
   fa.aviasales_token.value = ""; fa.aviasales_token.placeholder = a.aviasales_token || "opcional";
@@ -1118,6 +1267,12 @@ $("#btn-resortear").addEventListener("click", async () => {
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (est.detalle?.ultima) pintarDetalle(); });
 
 (async function iniciar() {
+  if (PUBLICO) {
+    pub.enlace = enlacePersonal();
+    $("#btn-ajustes").hidden = true;
+    $("#form-alerta button[type=submit]").textContent = "Crear alerta en Telegram";
+    document.title = "Avisos de vuelos baratos";
+  }
   await cargarAeropuertos();
   if (!$("#origen-txt").matches(":focus")) selectores.origen.fijar($("#form-alerta").origen.value);
   try {
